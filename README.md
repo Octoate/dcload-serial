@@ -60,7 +60,7 @@ For the Dreamcast part, you have two options.
  
 * Create a **Padus DiscJuggler** (`CDI`) image to burn later (requires 
   the `mkisofs` and `cdi4dc` tools):
-  1. `make -C ./host-src/misc` (build the miniLZO binary)
+  1. `make -C ./host-src/misc` (build the LZ4 binary)
   2. `make -C ./target-src` (build the `1ST_READ.BIN`)
   3. `mkisofs -C 0,11702 -V dcload-serial -G ./make-cd/IP.BIN -joliet -rock -l -o temp.iso ./target-src/1st_read/1st_read.bin`
   4. `cdi4dc temp.iso dcload-serial.cdi`
@@ -130,8 +130,7 @@ To run a GNU debugger session over the **dcload** connection:
 
 ## Credits
 
-* [miniLZO](http://www.oberhumer.com/opensource/lzo/) was written by 
-  [Markus Oberhumer](http://www.oberhumer.com/).
+* [LZ4](https://lz4.org) was written by Yann Collet.
 * There are some various files from `newlib-1.8.2` here and `video.s` was
   written by [Marcus Comstedt](https://mc.pp.se/dc/).
 * Win32 porting and implementation of `-t` by **Florian 'Proff' Schulze**.
