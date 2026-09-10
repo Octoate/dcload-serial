@@ -20,7 +20,7 @@
  */
 
 #include "scif.h"
-#include "minilzo.h"
+#include "lz4.h"
 #include "video.h"
 
 #include <string.h>
@@ -28,6 +28,7 @@
 #define NAME "dcload-serial " DCLOAD_VERSION
 
 #define INITIAL_SPEED   57600
+#define DCLOADBUFFER    16384
 
 #define VIDMODEREG (volatile unsigned int *)0xa05f8044
 #define VIDBORDER (volatile unsigned int *)0xa05f8040
@@ -168,7 +169,7 @@ unsigned int send_data_block_compressed(unsigned char * addr, unsigned int size)
     unsigned char *location = addr;
     unsigned char sum = 0;
     unsigned char data;
-    lzo_uint csize;
+    int csize;
     unsigned int sendsize;
 
     /* send uncompressed if no work memory provided */
@@ -184,15 +185,16 @@ unsigned int send_data_block_compressed(unsigned char * addr, unsigned int size)
             sendsize = 8192;
         else
             sendsize = size;
-        lzo1x_1_compress(addr, sendsize, buffer, &csize, wrkmem);
-        if(csize < sendsize) {
+        csize = LZ4_compress_fast_extState(wrkmem, (const char *)addr, (char *)buffer, (int)sendsize, LZ4_compressBound((int)sendsize), 1);
+        if(csize > 0 && (unsigned int)csize < sendsize) {
             /* send compressed */
             scif_putchar('C');
-            put_uint(csize);
+            put_uint((unsigned int)csize);
             data = 'B';
             while(data != 'G') {
+                sum = 0;
                 location = buffer;
-                for(i = 0; i < csize; i++) {
+                for(i = 0; i < (unsigned int)csize; i++) {
                     data = *(location++);
                     scif_putchar(data);
                     sum ^= data;
@@ -228,9 +230,10 @@ void draw_progress(unsigned int current, unsigned int total) {
 
 void load_data_block_general(unsigned char * addr, unsigned int total, unsigned int verbose) {
     unsigned char type, sum, ok;
-    lzo_uint size, newsize, realtotal;
+    unsigned int size, realtotal = 0;
+    int decomp_size;
     unsigned char *tmp = buffer;
-    int i;
+    unsigned int i;
     unsigned char *data = addr;
 
     if(verbose)
@@ -255,11 +258,12 @@ void load_data_block_general(unsigned char * addr, unsigned int total, unsigned 
                 for(i=0; i<size; i++)
                     tmp[i] = scif_getchar();
                 sum = scif_getchar();
-                if(lzo1x_decompress(tmp, size, data, &newsize, 0) == LZO_E_OK) {
+                decomp_size = LZ4_decompress_safe((const char *)tmp, (char *)data, (int)size, DCLOADBUFFER);
+                if(decomp_size > 0) {
                     ok = 'G';
                     scif_putchar(ok);
-                    total -= newsize;
-                    data += newsize;
+                    total -= (unsigned int)decomp_size;
+                    data += (unsigned int)decomp_size;
                 } else {
                     ok = 'B';
                     scif_putchar(ok);
@@ -298,8 +302,6 @@ int main(void) {
     } else {
         booted = NOT_BOOTED;
     }
-
-    lzo_init();
 
     wrkmem = 0;
 

@@ -1,18 +1,18 @@
 include ../../Makefile.cfg
 
-LZOPATH = ../../minilzo-2.10
-LZO	= ../../host-src/misc/lzo
+LZ4PATH = ../../lz4
+LZ4	= ../../host-src/misc/lz4
 
 CC	= $(TARGETCC)
-CFLAGS	= $(TARGETCFLAGS) -DDCLOAD_VERSION=\"$(VERSION)\"
-INCLUDE	= -I$(LZOPATH) -I../../target-inc
+CFLAGS	= $(TARGETCFLAGS) -ffunction-sections -fdata-sections -DDCLOAD_VERSION=\"$(VERSION)\"
+INCLUDE	= -I$(LZ4PATH) -I../../target-inc
 
 OBJCOPY	= $(TARGETOBJCOPY)
 
-#DCLOBJECTS	= dcload-crt0.o syscalls.o memcpy.o memset.o memmove.o memcmp.o scif.o disable.o go.o video.o minilzo.o dcload.o cdfs_redir.o cdfs_syscalls.o bswap.o
-DCLOBJECTS	= dcload-crt0.o syscalls.o memcpy.o memset.o memmove.o memcmp.o scif.o disable.o go.o video.o minilzo.o dcload.o cdfs_redir.o cdfs_syscalls.o
+#DCLOBJECTS	= dcload-crt0.o syscalls.o memcpy.o memset.o memmove.o memcmp.o scif.o disable.o go.o video.o lz4.o dcload.o cdfs_redir.o cdfs_syscalls.o bswap.o
+DCLOBJECTS	= dcload-crt0.o syscalls.o memcpy.o memset.o memmove.o memcmp.o scif.o disable.o go.o video.o lz4.o dcload.o cdfs_redir.o cdfs_syscalls.o
 EXCOBJECTS	= exception.o
-LZOFILES = $(LZOPATH)/minilzo.c $(LZOPATH)/minilzo.h $(LZOPATH)/lzoconf.h
+LZ4FILES = $(LZ4PATH)/lz4.c $(LZ4PATH)/lz4.h
 
 .c.o:
 	$(CC) $(CFLAGS) $(INCLUDE) -o $@ -c $< 
@@ -21,19 +21,19 @@ LZOFILES = $(LZOPATH)/minilzo.c $(LZOPATH)/minilzo.h $(LZOPATH)/lzoconf.h
 .S.o:
 	$(CC) $(CFLAGS) $(INCLUDE) -o $@ -c $< 
 
-all: dcload.lzo exception.lzo
+all: dcload.lz4 exception.lz4
 
-dcload.lzo: dcload.bin
-	$(LZO) $< $@	
+dcload.lz4: dcload.bin
+	$(LZ4) $< $@	
 
 dcload.bin: dcload
 	$(OBJCOPY) -R .stack -O binary $< $@
 
 dcload: $(DCLOBJECTS)
-	$(CC) $(CFLAGS) -Wl,-Tdcload.x -nostartfiles -nostdlib $^ -o $@ -lgcc
+	$(CC) $(CFLAGS) -Wl,-Tdcload.x -Wl,--gc-sections -nostartfiles -nostdlib $^ -o $@ -lgcc
 
-exception.lzo: exception.bin
-	$(LZO) $< $@	
+exception.lz4: exception.bin
+	$(LZ4) $< $@	
 
 exception.bin: exception
 	$(OBJCOPY) -O binary $< $@	
@@ -41,13 +41,13 @@ exception.bin: exception
 exception: $(EXCOBJECTS)
 	$(CC) $(CFLAGS) -Wl,-Ttext=0x8c00f400 -nostartfiles -nostdlib $^ -o $@
 
-minilzo.o: $(LZOFILES)
-	$(CC) $(CFLAGS) $(INCLUDE) -o $@ -c $< 
+lz4.o: $(LZ4FILES)
+	$(CC) $(CFLAGS) $(INCLUDE) -DLZ4_STATIC_LINKING_ONLY_DISABLE_MEMORY_ALLOCATION=1 -o $@ -c $<
 
 .PHONY : clean
 clean:
-	-rm -f $(DCLOBJECTS) $(EXCOBJECTS) dcload exception dcload.bin exception.bin
+	-rm -f $(DCLOBJECTS) $(EXCOBJECTS) dcload exception dcload.bin exception.bin *.lz4
 
 .PHONY : distclean
 distclean: clean 
-	-rm -f *.lzo
+	-rm -f *.lz4

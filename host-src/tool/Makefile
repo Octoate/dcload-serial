@@ -1,12 +1,12 @@
 include ../../Makefile.cfg
 
-LZOPATH = ../../minilzo-2.10
+LZ4PATH = ../../lz4
 
 CC		= $(HOSTCC)
 CFLAGS	= $(HOSTCFLAGS) -DDCLOAD_VERSION=\"$(VERSION)\" -DDEFAULT_SPEED=$(TOOL_DEFAULT_SPEED) -DSERIALDEVICE="\"$(SERIALDEVICE)\"" -DHAVE_GETOPT
 
 LDFLAGS = $(HOSTLDFLAGS)
-INCLUDE = -I$(LZOPATH) -I/usr/local/include
+INCLUDE = -I$(LZ4PATH) -I/usr/local/include
 
 # Adding static flag if asked
 ifeq ($(STANDALONE_BINARY),1)
@@ -48,8 +48,8 @@ endif
 
 DCTOOL	= dc-tool-ser$(EXECUTABLEEXTENSION)
 
-OBJECTS	= dc-tool.o minilzo.o syscalls.o unlink.o shim.o
-LZOFILES = $(LZOPATH)/minilzo.c $(LZOPATH)/minilzo.h $(LZOPATH)/lzoconf.h
+OBJECTS	= dc-tool.o lz4.o lz4hc.o syscalls.o unlink.o shim.o
+LZ4FILES = $(LZ4PATH)/lz4.c $(LZ4PATH)/lz4.h $(LZ4PATH)/lz4hc.c $(LZ4PATH)/lz4hc.h
 
 .c.o:
 	$(CC) $(CFLAGS) $(INCLUDE) -o $@ -c $<
@@ -59,8 +59,11 @@ all: $(DCTOOL)
 $(DCTOOL): $(OBJECTS)
 	$(CC) -o $@ $(OBJECTS) $(LDFLAGS)
 
-minilzo.o: $(LZOFILES)
-	$(CC) $(CFLAGS) $(INCLUDE) -o $@ -c $< 
+lz4.o: $(LZ4PATH)/lz4.c $(LZ4PATH)/lz4.h
+	$(CC) $(CFLAGS) $(INCLUDE) -o $@ -c $<
+
+lz4hc.o: $(LZ4PATH)/lz4hc.c $(LZ4PATH)/lz4hc.h $(LZ4PATH)/lz4.h
+	$(CC) $(CFLAGS) $(INCLUDE) -o $@ -c $<
 
 .PHONY : install
 install: $(DCTOOL) | $(TOOLINSTALLDIR)

@@ -65,7 +65,8 @@
 #ifdef __FreeBSD__
 #include <netinet/in.h>
 #endif
-#include "minilzo.h"
+#include "lz4.h"
+#include "lz4hc.h"
 #include "syscalls.h"
 #include "dc-io.h"
 
@@ -96,11 +97,6 @@ SOCKET socket_fd = 0;
 #ifndef O_BINARY
 #define O_BINARY 0
 #endif
-
-#define HEAP_ALLOC(var,size) \
-        long __LZO_MMODEL var [ ((size) + (sizeof(long) - 1)) / sizeof(long) ]
-
-static HEAP_ALLOC(wrkmem, LZO1X_1_MEM_COMPRESS);
 
 #ifndef HAVE_GETOPT
 /* The following code for getopt is from the libc-source of FreeBSD,
@@ -242,6 +238,8 @@ HANDLE hCommPort;
 BOOL bDebugSocketStarted = FALSE;
 #endif /* _WIN32 */
 
+static void serial_failure(const char *operation);
+
 void cleanup(void) {
     if(!gdb_socket_started)
         return;
@@ -269,41 +267,59 @@ void cleanup(void) {
 #ifdef _WIN32
 int serial_read(void *buffer, int count) {
     BOOL fSuccess;
+    DWORD transferred;
 
-    fSuccess = ReadFile(hCommPort, buffer, count, (DWORD *)&count, NULL);
+    fSuccess = ReadFile(hCommPort, buffer, (DWORD)count, &transferred, NULL);
     if(!fSuccess)
         return -1;
 
-    return count;
+    return (int)transferred;
 }
 
-int serial_write(void *buffer, int count) {
-    BOOL fSuccess;
+int serial_write(const void *buffer, int count) {
+    const unsigned char *current = buffer;
+    int total = 0;
 
-    fSuccess = WriteFile(hCommPort, buffer, count, (DWORD *)&count, NULL);
-    if(!fSuccess)
-        return -1;
+    while(total < count) {
+        BOOL fSuccess;
+        DWORD transferred;
 
-    return count;
+        fSuccess = WriteFile(hCommPort, current, (DWORD)(count - total),
+                             &transferred, NULL);
+        if(!fSuccess)
+            return -1;
+        if(!transferred)
+            return total;
+
+        current += transferred;
+        total += (int)transferred;
+    }
+
+    return total;
 }
 
 int serial_putc(char ch) {
-    BOOL fSuccess;
-    int count = 1;
-
-    fSuccess = WriteFile(hCommPort, &ch, count, (DWORD *)&count, NULL);
-    if(!fSuccess)
-        return -1;
-
-    return count;
+    return serial_write(&ch, 1);
 }
 #else
 int serial_read(void *buffer, int count) {
     return read(dcfd,buffer,count);
 }
 
-int serial_write(void *buffer, int count) {
-    return write(dcfd,buffer,count);
+int serial_write(const void *buffer, int count) {
+    const unsigned char *current = buffer;
+    int total = 0;
+
+    while(total < count) {
+        int transferred = write(dcfd, current, count - total);
+        if(transferred <= 0)
+            return transferred < 0 ? -1 : total;
+
+        current += transferred;
+        total += transferred;
+    }
+
+    return total;
 }
 
 int serial_putc(char ch) {
@@ -318,24 +334,21 @@ void blread(void *buf, int count) {
 
     while(count) {
         retval = serial_read(tmp, count);
-        if(retval == -1)
-            printf("blread: read error!\n");
-        else {
-            tmp += retval;
-            count -= retval;
-        }
+        if(retval <= 0)
+            serial_failure("serial read");
+
+        tmp += retval;
+        count -= retval;
     }
 }
 
-char serial_getc(void) {
+int serial_getc(void) {
     int retval;
-    char tmp;
+    unsigned char tmp;
 
     retval = serial_read(&tmp, 1);
-    if(retval == -1) {
-        printf("serial_getc: read error!\n");
-        tmp = 0x00;
-    }
+    if(retval != 1)
+        serial_failure("serial read");
 
     return tmp;
 }
@@ -345,10 +358,11 @@ int send_uint(unsigned int value) {
     unsigned int tmp = value;
 
     /* send little-endian */
-    serial_putc((char)(tmp & 0xFF));
-    serial_putc((char)((tmp >> 0x08) & 0xFF));
-    serial_putc((char)((tmp >> 0x10) & 0xFF));
-    serial_putc((char)((tmp >> 0x18) & 0xFF));
+    if(serial_putc((char)(tmp & 0xFF)) != 1 ||
+       serial_putc((char)((tmp >> 0x08) & 0xFF)) != 1 ||
+       serial_putc((char)((tmp >> 0x10) & 0xFF)) != 1 ||
+       serial_putc((char)((tmp >> 0x18) & 0xFF)) != 1)
+        serial_failure("serial write");
 
     /* get little-endian */
     tmp =  ((unsigned int) (serial_getc() & 0xFF));
@@ -357,7 +371,7 @@ int send_uint(unsigned int value) {
     tmp |= ((unsigned int) (serial_getc() & 0xFF) << 0x18);
 
     if(tmp != value)
-        return 0;
+        serial_failure("serial echo");
 
     return 1;
 }
@@ -378,7 +392,9 @@ unsigned int recv_uint(void) {
 /* receive total bytes from dc and store in data */
 void recv_data(void *data, unsigned int total, unsigned int verbose) {
     unsigned char type, sum, ok;
-    lzo_uint size, newsize;
+    unsigned int size;
+    int res;
+    int max_decomp_size;
     unsigned char *tmp;
 
     if(verbose) {
@@ -390,6 +406,8 @@ void recv_data(void *data, unsigned int total, unsigned int verbose) {
         blread(&type, 1);
 
         size = recv_uint();
+        if(!size || size > DCLOADBUFFER)
+            serial_failure("invalid data block size");
 
         switch(type) {
             case 'U':       // uncompressed
@@ -397,6 +415,8 @@ void recv_data(void *data, unsigned int total, unsigned int verbose) {
                     printf("U");
                     fflush(stdout);
                 }
+                if(size > total)
+                    serial_failure("data block exceeds requested size");
                 blread(data, size);
                 blread(&sum, 1);
                 ok = 'G';
@@ -410,13 +430,18 @@ void recv_data(void *data, unsigned int total, unsigned int verbose) {
                     fflush(stdout);
                 }
                 tmp = malloc(size);
+                if(!tmp)
+                    serial_failure("compressed data allocation");
                 blread(tmp, size);
                 blread(&sum, 1);
-                if(lzo1x_decompress(tmp, size, data, &newsize, 0) == LZO_E_OK) {
+                max_decomp_size = total < DCLOADBUFFER ? (int)total : DCLOADBUFFER;
+                res = LZ4_decompress_safe((const char *)tmp, (char *)data,
+                                          (int)size, max_decomp_size);
+                if(res > 0 && (unsigned int)res <= total) {
                     ok = 'G';
                     serial_write(&ok, 1);
-                    total -= newsize;
-                    data += newsize;
+                    total -= (unsigned int)res;
+                    data += res;
                 } else {
                     ok = 'B';
                     serial_write(&ok, 1);
@@ -425,7 +450,7 @@ void recv_data(void *data, unsigned int total, unsigned int verbose) {
                 free(tmp);
                 break;
             default:
-                break;
+                serial_failure("unknown data block type");
         }
     }
 
@@ -441,12 +466,16 @@ void send_data(unsigned char *addr, unsigned int size, unsigned int verbose) {
     unsigned char *location = (unsigned char *) addr;
     unsigned char sum = 0;
     unsigned char data;
-    lzo_uint csize;
+    int csize;
     unsigned int sendsize;
     unsigned char c;
     unsigned char *buffer;
+    int max_dst_size;
 
-    buffer = malloc(DCLOADBUFFER + DCLOADBUFFER / 64 + 16 + 3);
+    max_dst_size = LZ4_compressBound(DCLOADBUFFER);
+    buffer = malloc(max_dst_size);
+    if(!buffer)
+        serial_failure("compressed data allocation");
 
     if(verbose) {
         printf("send_data: ");
@@ -459,9 +488,9 @@ void send_data(unsigned char *addr, unsigned int size, unsigned int verbose) {
         else
             sendsize = size;
 
-        lzo1x_1_compress((unsigned char *)addr, sendsize, buffer, &csize, wrkmem);
+        csize = LZ4_compress_HC((const char *)addr, (char *)buffer, (int)sendsize, max_dst_size, LZ4HC_CLEVEL_MAX);
 
-        if(csize < sendsize) {
+        if(csize > 0 && (unsigned int)csize < sendsize) {
             // send compressed
             if(verbose) {
                 printf("C");
@@ -469,13 +498,13 @@ void send_data(unsigned char *addr, unsigned int size, unsigned int verbose) {
             }
             c = 'C';
             serial_write(&c, 1);
-            send_uint(csize);
+            send_uint((unsigned int)csize);
             data = 'B';
             while(data != 'G') {
                 location = buffer;
-                serial_write(location, csize);
+                serial_write(location, (unsigned int)csize);
                 sum = 0;
-                for(i = 0; i < csize; i++) {
+                for(i = 0; i < (unsigned int)csize; i++) {
                     data = *(location++);
                     sum ^= data;
                 }
@@ -503,6 +532,8 @@ void send_data(unsigned char *addr, unsigned int size, unsigned int verbose) {
         size -= sendsize;
         addr += sendsize;
     }
+
+    free(buffer);
 
     if(verbose) {
         printf("\n");
@@ -692,9 +723,10 @@ int open_serial(const char *devicename, unsigned int speed, unsigned int *speedt
         return -1;
     }
 
-    ctmoCommPort.ReadIntervalTimeout = MAXDWORD;
-    ctmoCommPort.ReadTotalTimeoutMultiplier = MAXDWORD;
-    ctmoCommPort.ReadTotalTimeoutConstant = MAXDWORD;
+    /* Match the blocking VMIN=1 behavior used by the POSIX serial path. */
+    ctmoCommPort.ReadIntervalTimeout = 0;
+    ctmoCommPort.ReadTotalTimeoutMultiplier = 0;
+    ctmoCommPort.ReadTotalTimeoutConstant = 0;
     ctmoCommPort.WriteTotalTimeoutMultiplier = 0;
     ctmoCommPort.WriteTotalTimeoutConstant = 0;
     SetCommTimeouts(hCommPort, &ctmoCommPort);
@@ -720,6 +752,12 @@ int open_serial(const char *devicename, unsigned int speed, unsigned int *speedt
     }
 #endif /* !_WIN32 */
     return 0;
+}
+
+static void serial_failure(const char *operation) {
+    fprintf(stderr, "%s failed\n", operation);
+    finish_serial();
+    exit(-1);
 }
 
 /* prepare for program exit */
@@ -899,8 +937,6 @@ unsigned int upload(unsigned char *filename, unsigned int address) {
     char *section_name;
     size_t index;
 #endif
-
-    lzo_init();
 
 #ifdef WITH_BFD
     if((somebfd = bfd_openr(filename, 0))) { /* try bfd first */
@@ -1087,7 +1123,7 @@ void download(unsigned char *filename, unsigned int address,
     else
         serial_write("G", 1);
 
-    serial_read(&c, 1);
+    blread(&c, 1);
     send_uint(address);
     send_uint(size);
     send_uint(wrkmem);
@@ -1115,7 +1151,7 @@ void execute(unsigned int address, unsigned int console) {
     printf("Sending execute command (0x%x, console=%d)...", address, console);
 
     serial_write("A", 1);
-    serial_read(&c, 1);
+    blread(&c, 1);
 
     send_uint(address);
     send_uint(console);
@@ -1125,7 +1161,8 @@ void execute(unsigned int address, unsigned int console) {
 
 void do_console(unsigned char *path, unsigned char *isofile) {
     unsigned char command;
-    int isofd;
+    int isofd = -1;
+    int bytes_read;
 
     if(isofile) {
         isofd = open((char *)isofile, O_RDONLY | O_BINARY);
@@ -1141,7 +1178,14 @@ void do_console(unsigned char *path, unsigned char *isofile) {
 
     while(1) {
         fflush(stdout);
-        serial_read(&command, 1);
+        bytes_read = serial_read(&command, 1);
+        if(bytes_read < 0) {
+            printf("serial_read: read error!\n");
+            finish_serial();
+            exit(-1);
+        }
+        if(bytes_read == 0)
+            continue;
 
         switch(command) {
             case 0:
@@ -1223,7 +1267,7 @@ void do_console(unsigned char *path, unsigned char *isofile) {
         }
     }
 
-    if(isofd)
+    if(isofd >= 0)
         close(isofd);
 }
 
