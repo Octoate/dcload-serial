@@ -49,8 +49,28 @@
 #define DIRENT_OFFSET   1337
 
 #define MAX_OPEN_DIRS 512
+#define MAX_HOST_IO_SIZE (16U * 1024U * 1024U)
 
 static DIR *opendirs[MAX_OPEN_DIRS];
+
+static void *alloc_io_buffer(unsigned int size) {
+    void *buffer;
+
+    if(size > MAX_HOST_IO_SIZE) {
+        fprintf(stderr, "dcload request is too large: %u bytes\n", size);
+        finish_serial();
+        exit(-1);
+    }
+
+    buffer = malloc(size ? size : 1);
+    if(!buffer) {
+        fprintf(stderr, "unable to allocate dcload buffer: %u bytes\n", size);
+        finish_serial();
+        exit(-1);
+    }
+
+    return buffer;
+}
 
 void dc_fstat(void) {
     int filedes;
@@ -91,7 +111,7 @@ void dc_write(void) {
     filedes = recv_uint();
     count = recv_uint();
 
-    data = malloc(count);
+    data = alloc_io_buffer(count);
     recv_data(data, count, 0);
 
     retval = write(filedes, data, count);
@@ -110,7 +130,7 @@ void dc_read(void) {
     filedes = recv_uint();
     count = recv_uint();
 
-    data = malloc(count);
+    data = alloc_io_buffer(count);
     retval = read(filedes, data, count);
 
     send_data(data, count, 0);
@@ -130,7 +150,7 @@ void dc_open(void) {
 
     namelen = recv_uint();
 
-    pathname = malloc(namelen);
+    pathname = alloc_io_buffer(namelen);
 
     recv_data(pathname, namelen, 0);
 
@@ -178,7 +198,7 @@ void dc_creat(void) {
 
     namelen = recv_uint();
 
-    pathname = malloc(namelen);
+    pathname = alloc_io_buffer(namelen);
 
     recv_data(pathname, namelen, 0);
 
@@ -197,12 +217,12 @@ void dc_link(void) {
     int retval;
 
     namelen1 = recv_uint();
-    pathname1 = malloc(namelen1);
+    pathname1 = alloc_io_buffer(namelen1);
 
     recv_data(pathname1, namelen1, 0);
 
     namelen2 = recv_uint();
-    pathname2 = malloc(namelen2);
+    pathname2 = alloc_io_buffer(namelen2);
 
     recv_data(pathname2, namelen2, 0);
 
@@ -226,7 +246,7 @@ void dc_unlink(void) {
 
     namelen = recv_uint();
 
-    pathname = malloc(namelen);
+    pathname = alloc_io_buffer(namelen);
 
     recv_data(pathname, namelen, 0);
 
@@ -244,7 +264,7 @@ void dc_chdir(void) {
 
     namelen = recv_uint();
 
-    pathname = malloc(namelen);
+    pathname = alloc_io_buffer(namelen);
 
     recv_data(pathname, namelen, 0);
 
@@ -263,7 +283,7 @@ void dc_chmod(void) {
 
     namelen = recv_uint();
 
-    pathname = malloc(namelen);
+    pathname = alloc_io_buffer(namelen);
 
     recv_data(pathname, namelen, 0);
 
@@ -307,7 +327,7 @@ void dc_stat(void) {
 
     namelen = recv_uint();
 
-    filename = malloc(namelen);
+    filename = alloc_io_buffer(namelen);
 
     recv_data(filename, namelen, 0);
 
@@ -346,7 +366,7 @@ void dc_utime(void) {
 
     namelen = recv_uint();
 
-    pathname = malloc(namelen);
+    pathname = alloc_io_buffer(namelen);
 
     recv_data(pathname, namelen, 0);
 
@@ -375,7 +395,7 @@ void dc_opendir(void) {
 
     namelen = recv_uint();
 
-    dirname = malloc(namelen);
+    dirname = alloc_io_buffer(namelen);
 
     recv_data(dirname, namelen, 0);
 
@@ -471,20 +491,27 @@ void dc_rewinddir(void) {
 void dc_cdfs_redir_read_sectors(int isofd) {
     int start;
     int num;
+    unsigned int size;
     unsigned char * buf;
 
     start = recv_uint();
     num = recv_uint();
+    if(num < 0 || (unsigned int)num > MAX_HOST_IO_SIZE / 2048U) {
+        fprintf(stderr, "invalid cdfs read size: %d sectors\n", num);
+        finish_serial();
+        exit(-1);
+    }
+    size = (unsigned int)num * 2048U;
 
     start -= 150;
 
     lseek(isofd, start * 2048, SEEK_SET);
 
-    buf = malloc(num * 2048);
+    buf = alloc_io_buffer(size);
 
-    read(isofd, buf, num * 2048);
+    read(isofd, buf, size);
 
-    send_data(buf, num * 2048, 0);
+    send_data(buf, size, 0);
     free(buf);
 }
 
