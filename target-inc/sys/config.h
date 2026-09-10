@@ -99,12 +99,15 @@
 #endif
 #endif
 
+#ifndef ___int32_t_defined
 #if INT_MAX == 32767
 typedef long int __int32_t;
 typedef unsigned long int __uint32_t;
 #else
 typedef int __int32_t;
 typedef unsigned int __uint32_t;
+#endif
+#define ___int32_t_defined 1
 #endif
 
 #ifndef _POINTER_INT
