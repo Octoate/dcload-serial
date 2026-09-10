@@ -25,24 +25,21 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include "minilzo.h"
-
-#define HEAP_ALLOC(var,size) \
-        long __LZO_MMODEL var [ ((size) + (sizeof(long) - 1)) / sizeof(long) ]
-
-static HEAP_ALLOC(wrkmem, LZO1X_1_MEM_COMPRESS);
+#include "lz4.h"
+#include "lz4hc.h"
 
 void usage(void) {
-    printf("usage: lzo <in> <out>\n");
+    printf("usage: lz4 <in> <out>\n");
     exit(1);
 }
 
 int main(int argc, char *argv[]) {
     int in, out;
-    unsigned char *data;
-    unsigned char *cdata;
-    int r;
-    lzo_uint length,clength;
+    char *data;
+    char *cdata;
+    int clength;
+    size_t length;
+    int max_dst_size;
 
     if(argc != 3)
         usage();
@@ -64,37 +61,46 @@ int main(int argc, char *argv[]) {
     length = lseek(in, 0, SEEK_END);
     lseek(in, 0, SEEK_SET);
 
+    max_dst_size = LZ4_compressBound((int)length);
+
     data = malloc(length);
-    cdata = malloc(length+length/64 + 16 + 3);
+    cdata = malloc(max_dst_size);
 
-    read(in, data, length);
-
-    if(lzo_init() != LZO_E_OK)
-    {
-        printf("lzo_init() failed !!!\n");
+    if(!data || !cdata) {
+        fprintf(stderr, "out of memory\n");
         exit(1);
     }
 
-    r = lzo1x_1_compress(data,length,cdata,&clength,wrkmem);
-    if(r == LZO_E_OK) {
-        printf("compressed %lu bytes into %lu bytes\n",
-                (long) length, (long) clength);
+    if(read(in, data, length) != (ssize_t)length) {
+        perror("read");
+        exit(1);
+    }
+
+    clength = LZ4_compress_HC(data, cdata, (int)length, max_dst_size, LZ4HC_CLEVEL_MAX);
+    if(clength > 0) {
+        printf("compressed %lu bytes into %d bytes\n",
+                (unsigned long) length, clength);
     }
     else {
         /* this should NEVER happen */
-        printf("internal error - compression failed: %d\n", r);
+        printf("internal error - compression failed: %d\n", clength);
         return 2;
     }
 
     /* check for an incompressible block */
-    if(clength >= length) {
+    if((size_t)clength >= length) {
         printf("This block contains incompressible data.\n");
         return 0;
     }
 
-    write(out, cdata, clength);
+    if(write(out, cdata, clength) != clength) {
+        perror("write");
+        exit(1);
+    }
 
     close(in);
     close(out);
+    free(data);
+    free(cdata);
     exit(0);
 }
