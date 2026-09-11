@@ -355,20 +355,24 @@ int serial_getc(void) {
 
 /* send 4 bytes */
 int send_uint(unsigned int value) {
-    unsigned int tmp = value;
+    unsigned char send_buf[4];
+    unsigned char recv_buf[4];
+    unsigned int tmp;
 
     /* send little-endian */
-    if(serial_putc((char)(tmp & 0xFF)) != 1 ||
-       serial_putc((char)((tmp >> 0x08) & 0xFF)) != 1 ||
-       serial_putc((char)((tmp >> 0x10) & 0xFF)) != 1 ||
-       serial_putc((char)((tmp >> 0x18) & 0xFF)) != 1)
+    send_buf[0] = (unsigned char)(value & 0xFF);
+    send_buf[1] = (unsigned char)((value >> 0x08) & 0xFF);
+    send_buf[2] = (unsigned char)((value >> 0x10) & 0xFF);
+    send_buf[3] = (unsigned char)((value >> 0x18) & 0xFF);
+    if(serial_write(send_buf, 4) != 4)
         serial_failure("serial write");
 
     /* get little-endian */
-    tmp =  ((unsigned int) (serial_getc() & 0xFF));
-    tmp |= ((unsigned int) (serial_getc() & 0xFF) << 0x08);
-    tmp |= ((unsigned int) (serial_getc() & 0xFF) << 0x10);
-    tmp |= ((unsigned int) (serial_getc() & 0xFF) << 0x18);
+    blread(recv_buf, 4);
+    tmp =  ((unsigned int) recv_buf[0]);
+    tmp |= ((unsigned int) recv_buf[1] << 0x08);
+    tmp |= ((unsigned int) recv_buf[2] << 0x10);
+    tmp |= ((unsigned int) recv_buf[3] << 0x18);
 
     if(tmp != value)
         serial_failure("serial echo");
