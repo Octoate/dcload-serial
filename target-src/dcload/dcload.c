@@ -29,6 +29,7 @@
 
 #define INITIAL_SPEED   57600
 #define DCLOADBUFFER    16384
+#define LZ4_DICT_SIZE   65535
 
 #define VIDMODEREG (volatile unsigned int *)0xa05f8044
 #define VIDBORDER (volatile unsigned int *)0xa05f8040
@@ -231,7 +232,11 @@ void draw_progress(unsigned int current, unsigned int total) {
 void load_data_block_general(unsigned char * addr, unsigned int total, unsigned int verbose) {
     unsigned char type, sum, ok;
     unsigned int size, realtotal = 0;
+    unsigned int written = 0;
     int decomp_size;
+    int max_decomp_size;
+    int dict_size;
+    const char *dict_start;
     unsigned char *tmp = buffer;
     unsigned int i;
     unsigned char *data = addr;
@@ -253,16 +258,23 @@ void load_data_block_general(unsigned char * addr, unsigned int total, unsigned 
                 sum = scif_getchar();
                 scif_putchar('G');
                 total -= size;
+                written += size;
                 break;
             case 'C':               /* compressed */
                 for(i=0; i<size; i++)
                     tmp[i] = scif_getchar();
                 sum = scif_getchar();
-                decomp_size = LZ4_decompress_safe((const char *)tmp, (char *)data, (int)size, DCLOADBUFFER);
-                if(decomp_size > 0) {
+                max_decomp_size = total < DCLOADBUFFER ? (int)total : DCLOADBUFFER;
+                dict_size = written < LZ4_DICT_SIZE ? (int)written : LZ4_DICT_SIZE;
+                dict_start = (const char *)data - dict_size;
+                decomp_size = LZ4_decompress_safe_usingDict(
+                    (const char *)tmp, (char *)data, (int)size,
+                    max_decomp_size, dict_start, dict_size);
+                if(decomp_size > 0 && (unsigned int)decomp_size <= total) {
                     ok = 'G';
                     scif_putchar(ok);
                     total -= (unsigned int)decomp_size;
+                    written += (unsigned int)decomp_size;
                     data += (unsigned int)decomp_size;
                 } else {
                     ok = 'B';

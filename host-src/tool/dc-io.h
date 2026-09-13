@@ -1,10 +1,13 @@
 #ifndef __DC_IO_H__
 #define __DC_IO_H__
 
+#include "lz4hc.h"
+
 int send_uint(unsigned int value);
 unsigned int recv_uint(void);
 void recv_data(void *data, unsigned int total, unsigned int verbose);
-void send_data(unsigned char *addr, unsigned int size, unsigned int verbose);
+void send_data(unsigned char *addr, unsigned int size, unsigned int verbose,
+               LZ4_streamHC_t *stream);
 void finish_serial(void);
 
 #endif /* __DC_IO_H__ */

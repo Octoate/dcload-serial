@@ -133,7 +133,7 @@ void dc_read(void) {
     data = alloc_io_buffer(count);
     retval = read(filedes, data, count);
 
-    send_data(data, count, 0);
+    send_data(data, count, 0, NULL);
 
     send_uint(retval);
 
@@ -469,7 +469,8 @@ void dc_readdir(void) {
     send_uint(somedirent->d_type);
 #endif
     send_uint(strlen(somedirent->d_name)+1);
-    send_data((unsigned char *)somedirent->d_name, strlen(somedirent->d_name)+1, 0);
+    send_data((unsigned char *)somedirent->d_name, strlen(somedirent->d_name)+1,
+              0, NULL);
 }
 
 void dc_rewinddir(void) {
@@ -511,7 +512,7 @@ void dc_cdfs_redir_read_sectors(int isofd) {
 
     read(isofd, buf, size);
 
-    send_data(buf, size, 0);
+    send_data(buf, size, 0, NULL);
     free(buf);
 }
 
@@ -578,7 +579,7 @@ void dc_gdbpacket(void) {
 #endif
     send_uint(retval);
     if(retval > 0)
-        send_data((unsigned char *)gdb_buf, retval, 0);
+        send_data((unsigned char *)gdb_buf, retval, 0, NULL);
 }
 
 void dc_exit(void) {

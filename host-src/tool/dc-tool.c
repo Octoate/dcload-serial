@@ -464,8 +464,20 @@ void recv_data(void *data, unsigned int total, unsigned int verbose) {
     }
 }
 
+static LZ4_streamHC_t *create_compression_stream(void) {
+    LZ4_streamHC_t *stream;
+
+    stream = LZ4_createStreamHC();
+    if(!stream)
+        serial_failure("compression stream allocation");
+
+    LZ4_resetStreamHC_fast(stream, LZ4HC_CLEVEL_MAX);
+    return stream;
+}
+
 /* send size bytes to dc from addr */
-void send_data(unsigned char *addr, unsigned int size, unsigned int verbose) {
+void send_data(unsigned char *addr, unsigned int size, unsigned int verbose,
+               LZ4_streamHC_t *stream) {
     unsigned int i;
     unsigned char *location = (unsigned char *) addr;
     unsigned char sum = 0;
@@ -492,7 +504,14 @@ void send_data(unsigned char *addr, unsigned int size, unsigned int verbose) {
         else
             sendsize = size;
 
-        csize = LZ4_compress_HC((const char *)addr, (char *)buffer, (int)sendsize, max_dst_size, LZ4HC_CLEVEL_MAX);
+        if(stream)
+            csize = LZ4_compress_HC_continue(stream, (const char *)addr,
+                                              (char *)buffer, (int)sendsize,
+                                              max_dst_size);
+        else
+            csize = LZ4_compress_HC((const char *)addr, (char *)buffer,
+                                     (int)sendsize, max_dst_size,
+                                     LZ4HC_CLEVEL_MAX);
 
         if(csize > 0 && (unsigned int)csize < sendsize) {
             // send compressed
@@ -531,6 +550,13 @@ void send_data(unsigned char *addr, unsigned int size, unsigned int verbose) {
             }
             serial_write(&sum, 1);
             blread(&data, 1);
+
+            if(stream) {
+                LZ4_resetStreamHC_fast(stream, LZ4HC_CLEVEL_MAX);
+                if(LZ4_loadDictHC(stream, (const char *)addr, (int)sendsize)
+                   != (int)sendsize)
+                    serial_failure("compression dictionary");
+            }
         }
 
         size -= sendsize;
@@ -941,6 +967,7 @@ unsigned int upload(unsigned char *filename, unsigned int address) {
     char *section_name;
     size_t index;
 #endif
+    LZ4_streamHC_t *stream;
 
 #ifdef WITH_BFD
     if((somebfd = bfd_openr(filename, 0))) { /* try bfd first */
@@ -972,7 +999,9 @@ unsigned int upload(unsigned char *filename, unsigned int address) {
                         send_uint(section->lma);
                         send_uint(sectsize);
 
-                        send_data(inbuf, sectsize, 1);
+                        stream = create_compression_stream();
+                        send_data(inbuf, sectsize, 1, stream);
+                        LZ4_freeStreamHC(stream);
 
                         free(inbuf);
                     }
@@ -1048,9 +1077,11 @@ unsigned int upload(unsigned char *filename, unsigned int address) {
             send_uint(shdr->sh_addr);
             send_uint(shdr->sh_size);
 
+            stream = create_compression_stream();
             do {
-                send_data(data->d_buf, data->d_size, 1);
+                send_data(data->d_buf, data->d_size, 1, stream);
             } while((data = elf_getdata(section, data)));
+            LZ4_freeStreamHC(stream);
         }
 
         elf_end(elf);
@@ -1088,7 +1119,9 @@ unsigned int upload(unsigned char *filename, unsigned int address) {
     send_uint(address);
     send_uint(size);
 
-    send_data(inbuf, size, 1);
+    stream = create_compression_stream();
+    send_data(inbuf, size, 1, stream);
+    LZ4_freeStreamHC(stream);
 
 done_transfer:
     gettimeofday(&endtime, 0);
